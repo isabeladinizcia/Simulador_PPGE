@@ -2,9 +2,9 @@
 # 1. CARREGAR PACOTES
 # ============================================================
 
-library(DBI)
-library(RSQLite)
-library(readr)
+library(DBI) # Interface para trabalhar com bancos de dados.
+library(RSQLite) # 	Permite utilizar SQLite no R.
+library(readr) #  Importa os arquivos CSV
 
 # ============================================================
 # 2. DEFINIR CAMINHOS

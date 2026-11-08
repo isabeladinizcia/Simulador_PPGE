@@ -123,8 +123,6 @@ sjr_2021_categorias |>
   count(Sourceid) |>
   count(n, name = "quantidade_periodicos")
 
-
-
 # ============================================================
 # 9. CRIAR FUNÇÃO DE LIMPEZA
 # ============================================================
