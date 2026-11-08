@@ -2,19 +2,19 @@
 # 1. CARREGAR PACOTES
 # ============================================================
 
-library(readr)
-library(dplyr)
-library(tidyr)
-library(stringr)
-library(purrr)
+library(readr) # 	Importar e exportar arquivos CSV.
+library(dplyr) # 	Selecionar, filtrar e transformar dados.
+library(tidyr) # Organizar e separar os dados.
+library(stringr) # Trabalhar com textos e caracteres.
+library(purrr) # Aplicar funções repetidamente a vários arquivos.
 
 
 # ============================================================
 # 2. DEFINIR PASTAS
 # ============================================================
 
-pasta_brutos <- "dados/brutos"
-pasta_limpos <- "dados/limpos"
+pasta_brutos <- "dados/brutos" # Arquivos originais
+pasta_limpos <- "dados/limpos" # Onde será guardado os arquivos tratados
 
 # ============================================================
 # 3. IMPORTAR ARQUIVO SJR DE 2021
@@ -131,9 +131,12 @@ sjr_2021_categorias |>
 
 limpar_sjr <- function(arquivo) {
   
-  # 1. Identificar o ano pelo nome do arquivo
+  # 1. Identificar o ano
   ano <- as.integer(
-    stringr::str_extract(basename(arquivo), "\\d{4}")
+    stringr::str_extract(
+      basename(arquivo),
+      "\\d{4}"
+    )
   )
   
   # 2. Importar o arquivo
@@ -143,16 +146,17 @@ limpar_sjr <- function(arquivo) {
     show_col_types = FALSE
   )
   
-  # 3. Converter SJR para numérico
+  # 3. Converter SJR
   dados <- dados |>
     mutate(
       SJR = parse_number(
         SJR,
         locale = locale(decimal_mark = ",")
-      )
+      ),
+      ano = .env$ano
     )
   
-  # 4. Selecionar as colunas importantes
+  # 4. Selecionar colunas e adicionar ano
   dados <- dados |>
     select(
       Sourceid,
@@ -162,15 +166,13 @@ limpar_sjr <- function(arquivo) {
       SJR,
       Categories,
       Areas,
-      all_of("Publisher...6")
-    ) |>
-    mutate(
-      ano = .env$ano
-    )
+      all_of("Publisher...6"),
+      ano
+    ) 
   
-  # 5. Separar as categorias científicas
+  # 5. Separar categorias
   categorias <- dados |>
-    select(Sourceid, Title, SJR, Categories) |>
+    select(Sourceid, Title, SJR, Categories, ano) |>
     separate_longer_delim(
       Categories,
       delim = ";"
@@ -181,8 +183,7 @@ limpar_sjr <- function(arquivo) {
       categoria = str_remove(
         Categories,
         "\\s*\\(Q[1-4]\\)\\s*$"
-      ),
-      ano = ano
+      )
     ) |>
     filter(
       !is.na(categoria),
@@ -197,7 +198,7 @@ limpar_sjr <- function(arquivo) {
       quartil
     )
   
-  # 6. Retornar os dados organizados
+  # 6. Retornar resultados
   list(
     periodicos = dados,
     categorias = categorias
@@ -244,6 +245,8 @@ names(resultados_sjr) <- str_extract(
   "\\d{4}"
 )
 
+names(resultados_sjr[["2021"]]$periodicos)
+
 # ============================================================
 # 14. JUNTAR OS DADOS HISTÓRICOS
 # ============================================================
@@ -256,4 +259,18 @@ periodicos_historico <- purrr::map_dfr(
 categorias_historico <- purrr::map_dfr(
   resultados_sjr,
   "categorias"
+)
+
+# ============================================================
+# 16. SALVAR OS DADOS LIMPOS
+# ============================================================
+
+write_csv(
+  periodicos_historico,
+  file.path(pasta_limpos, "periodicos_historico.csv")
+)
+
+write_csv(
+  categorias_historico,
+  file.path(pasta_limpos, "categorias_historico.csv")
 )
