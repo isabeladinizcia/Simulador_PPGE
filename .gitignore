@@ -2,3 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
+
+# Banco de dados: passa de 100 MB (limite do GitHub).
+# É recriado rodando os scripts 02_banco_dados.R e 03_percentis.R.
+dados/limpos/*.sqlite
