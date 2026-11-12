@@ -1,0 +1,144 @@
+---
+title: "06 - Pontuação do docente"
+output: html_document
+params:
+  ano_inicio: 2022
+  ano_fim: 2025
+---
+
+Regras usadas:
+
+- Cada artigo vale o **percentil da revista no ano em que foi publicado** (opção A).
+- Só contam artigos publicados no período de avaliação.
+- Artigos com percentil abaixo de 0,25 não pontuam.
+- A pontuação é a soma dos **4 melhores artigos** e precisa ser igual ou maior que 1,25.
+
+Antes de rodar, os scripts 01 a 05 precisam ter sido executados.
+
+## 1. Conectar ao banco
+
+```{r}
+library(DBI) # Interface para trabalhar com bancos de dados.
+library(RSQLite) # Permite utilizar SQLite no R.
+
+con <- dbConnect(
+  SQLite(),
+  here::here("dados/limpos", "simulador_ppge.sqlite")
+)
+
+# Período de avaliação (vem dos params, no topo do arquivo).
+# Nos blocos SQL, ?ano_inicio e ?ano_fim são trocados por estes valores.
+ano_inicio <- params$ano_inicio
+ano_fim <- params$ano_fim
+```
+
+## 2. Percentil de cada artigo
+
+Liga o artigo à revista pelo ISSN e pega o percentil da revista no ano do
+artigo. O `LEFT JOIN` mantém os artigos que não encontram percentil, para
+podermos ver quais ficaram de fora.
+
+Um ISSN pode apontar para mais de uma revista no SCImago, por isso o
+`MAX()` com `GROUP BY` garante uma linha por artigo.
+
+```{sql connection=con, output.var="percentil_artigos"}
+SELECT a.rowid AS id_artigo,
+       a.ano,
+       a.titulo,
+       a.revista,
+       a.issn,
+       MAX(p.percentil) AS percentil
+FROM artigos_docente AS a
+LEFT JOIN issn_revista AS i
+       ON i.issn = a.issn
+LEFT JOIN percentil_revista_ano AS p
+       ON p.Sourceid = i.Sourceid
+      AND p.ano = a.ano
+WHERE a.ano BETWEEN ?ano_inicio AND ?ano_fim
+GROUP BY a.rowid
+ORDER BY percentil DESC
+```
+
+```{r}
+percentil_artigos
+```
+
+## 3. Artigos sem percentil
+
+Ou a revista não está no SCImago, ou não há SCImago para o ano do artigo.
+
+```{sql connection=con}
+SELECT a.ano, a.revista, a.issn,
+       CASE
+         WHEN i.Sourceid IS NULL THEN 'Revista não encontrada no SCImago'
+         ELSE 'Sem percentil no ano do artigo'
+       END AS motivo
+FROM artigos_docente AS a
+LEFT JOIN issn_revista AS i ON i.issn = a.issn
+WHERE a.ano BETWEEN ?ano_inicio AND ?ano_fim
+  AND NOT EXISTS (
+    SELECT 1
+    FROM percentil_revista_ano AS p
+    WHERE p.Sourceid = i.Sourceid
+      AND p.ano = a.ano
+  )
+GROUP BY a.rowid
+```
+
+## 4. Os 4 melhores artigos válidos
+
+`ROW_NUMBER()` numera os artigos do maior para o menor percentil.
+
+```{sql connection=con}
+PRAGMA table_info(artigos_docente)
+```
+
+
+```{sql connection=con, output.var="melhores"}
+WITH pontos AS (
+  SELECT a.rowid AS id_artigo,
+         a.ano,
+         a.titulo,
+         a.revista,
+         MAX(p.percentil) AS percentil
+  FROM artigos_docente AS a
+  JOIN issn_revista AS i
+    ON i.issn = a.issn
+  JOIN percentil_revista_ano AS p
+    ON p.Sourceid = i.Sourceid
+   AND p.ano = a.ano
+  WHERE a.ano BETWEEN ?ano_inicio AND ?ano_fim
+  GROUP BY a.rowid
+  HAVING MAX(p.percentil) >= 0.25
+),
+ranking AS (
+  SELECT *,
+         ROW_NUMBER() OVER (ORDER BY percentil DESC) AS posicao
+  FROM pontos
+)
+SELECT posicao, ano, revista, titulo, percentil
+FROM ranking
+WHERE posicao <= 4
+ORDER BY posicao
+```
+
+```{r}
+melhores
+```
+
+## 5. Resultado
+
+```{r}
+pontuacao <- sum(melhores$percentil)
+
+data.frame(
+  artigos_considerados = nrow(melhores),
+  pontuacao = round(pontuacao, 3),
+  minimo = 1.25,
+  resultado = ifelse(pontuacao >= 1.25, "Atinge o mínimo", "Não atinge o mínimo")
+)
+```
+
+```{r}
+dbDisconnect(con)
+```

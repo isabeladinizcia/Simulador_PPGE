@@ -1,5 +1,10 @@
-
 library(shiny)
+library(here) # Acha a pasta do projeto, de onde quer que o app rode.
+
+# Funções de leitura do Lattes e de pontuação
+source(here("R", "funcoes_simulador.R"))
+
+arquivo_banco <- here("dados/limpos", "simulador_ppge.sqlite")
 
 ui <- navbarPage(
   
@@ -47,35 +52,51 @@ ui <- navbarPage(
         "periodo",
         "Período de avaliação:",
         start = "2022-01-01",
-        end = Sys.Date()
+        end = Sys.Date(),
+        format = "dd/mm/yyyy",
+        separator = "até",
+        language = "pt-BR"
       ),
       
       h3("Afastamentos"),
       
-      checkboxInput(
-        "licenca",
-        "Possuiu licença ou afastamento?",
-        FALSE
+      p("O tempo de afastamento é somado e o início do período
+        de avaliação recua por esse total."),
+
+      numericInput(
+        "n_afastamentos",
+        "Quantidade de afastamentos:",
+        value = 0,
+        min = 0,
+        max = 10,
+        step = 1
       ),
-      
-      conditionalPanel(
-        condition = "input.licenca == true",
-        
-        dateInput("inicio_afastamento", "Início do afastamento:"),
-        
-        dateInput("fim_afastamento", "Fim do afastamento:")
-      ),
+
+      # Um campo de período para cada afastamento (criado no server)
+      uiOutput("campos_afastamentos"),
+
+      strong(textOutput("periodo_considerado")),
       
       h3("Currículo Lattes"),
       
       fileInput(
         "lattes",
         "Enviar currículo Lattes",
-        accept = c(".html", ".htm")
+        accept = c(".zip", ".xml", ".html", ".htm")
       ),
-      
-      p("O formato definitivo do arquivo será confirmado
-        posteriormente.")
+
+      p("Formatos aceitos:"),
+
+      tags$ul(
+        tags$li("XML (recomendado): o próprio dono do currículo baixa
+          o arquivo .zip pela plataforma Lattes. Pode enviar o .zip
+          direto, ou o .xml que está dentro dele."),
+        tags$li("HTML: abra o currículo, clique com o botão direito,
+          escolha \"Exibir código-fonte\" e salve a página (Ctrl+S).
+          A página normal salva com Ctrl+S também funciona.")
+      ),
+
+      textOutput("leitura_lattes")
     )
   ),
   
@@ -86,10 +107,10 @@ ui <- navbarPage(
     fluidPage(
       h2("Produção científica"),
       
-      p("Aqui serão apresentados os artigos identificados
-        no currículo Lattes."),
+      p("Artigos do currículo Lattes publicados no período de
+        avaliação, com o percentil da revista no ano do artigo."),
       
-      p("A extração automática será implementada posteriormente."),
+      textOutput("aviso_artigos"),
       
       tableOutput("artigos")
     )
@@ -109,6 +130,9 @@ ui <- navbarPage(
       
       p("Somente revistas com percentil igual ou superior
         a 0,25 serão consideradas."),
+
+      p("Artigos publicados em anos que ainda não têm SCImago
+        (por exemplo, 2026) ficam sem percentil e não pontuam."),
       
       h4("Pontuação mínima"),
       
@@ -127,10 +151,11 @@ ui <- navbarPage(
     fluidPage(
       h2("Resultado da avaliação"),
       
-      p("O resultado será calculado após a integração
-        da produção científica e dos dados SJR."),
+      h3(textOutput("resultado")),
       
-      textOutput("resultado")
+      h4("Artigos que entram na pontuação"),
+      
+      tableOutput("melhores")
     )
   ),
   
@@ -177,32 +202,147 @@ ui <- navbarPage(
 
 server <- function(input, output, session) {
   
-  # Exemplo provisório de artigos
-  output$artigos <- renderTable({
-    
-    data.frame(
-      Artigo = c(
-        "Artigo demonstrativo 1",
-        "Artigo demonstrativo 2"
-      ),
-      
-      Revista = c(
-        "Revista fictícia A",
-        "Revista fictícia B"
-      ),
-      
-      Ano = c(2024, 2023),
-      
-      Percentil = c(0.75, 0.50)
+  # Uma conexão com o banco para cada pessoa usando o app.
+  # Ela fecha sozinha quando a pessoa sai.
+  con <- dbConnect(SQLite(), arquivo_banco)
+  session$onSessionEnded(function() dbDisconnect(con))
+
+  # Quantidade de afastamentos informada (vazio conta como 0)
+  n_afastamentos <- reactive({
+    n <- input$n_afastamentos
+    if (is.null(n) || is.na(n)) 0 else max(0, min(10, round(n)))
+  })
+
+  # Cria um campo de período para cada afastamento.
+  # isolate() mantém as datas já digitadas quando a quantidade muda.
+  output$campos_afastamentos <- renderUI({
+    lapply(seq_len(n_afastamentos()), function(i) {
+      id <- paste0("afastamento_", i)
+      anterior <- isolate(input[[id]])
+
+      dateRangeInput(
+        id,
+        paste0("Afastamento ", i, ":"),
+        start = if (is.null(anterior)) NA else anterior[1],
+        end = if (is.null(anterior)) NA else anterior[2],
+        format = "dd/mm/yyyy",
+        separator = "até",
+        language = "pt-BR"
+      )
+    })
+  })
+
+  # Período de avaliação já recuado pelos afastamentos
+  periodo <- reactive({
+    afastamentos <- lapply(
+      seq_len(n_afastamentos()),
+      function(i) input[[paste0("afastamento_", i)]]
     )
-    
+
+    calcular_periodo(input$periodo, afastamentos)
+  })
+
+  output$periodo_considerado <- renderText({
+    p <- periodo()
+
+    paste0(
+      "Período considerado: ", p$ano_inicio, " a ", p$ano_fim,
+      " (", p$dias_afastado, " dias de afastamento)."
+    )
+  })
+
+  # Artigos lidos do HTML enviado
+  artigos <- reactive({
+    req(input$lattes)
+
+    # Se o arquivo não for um currículo válido, mostra um aviso
+    # em vez de travar o app.
+    tryCatch(
+      ler_artigos_lattes(input$lattes$datapath),
+      error = function(e) {
+        validate(paste(
+          "Não foi possível ler o currículo. Envie o .zip ou .xml",
+          "baixado do Lattes, ou o HTML salvo do navegador."
+        ))
+      }
+    )
   })
   
-  output$resultado <- renderText({
-    
-    "A avaliação ainda não foi realizada."
-    
+  # Percentil de cada artigo no período escolhido
+  percentis <- reactive({
+    percentil_artigos(
+      con,
+      artigos(),
+      ano_inicio = periodo()$ano_inicio,
+      ano_fim = periodo()$ano_fim
+    )
   })
+  
+  pontos <- reactive({
+    calcular_pontuacao(percentis())
+  })
+  
+  # Mostra na aba Dados do docente quantos artigos foram lidos
+  # (ou o aviso de erro, se a leitura falhou)
+  output$leitura_lattes <- renderText({
+    if (nrow(artigos()) == 0) {
+      return(paste(
+        "Nenhum artigo encontrado. Confira se o arquivo enviado",
+        "é mesmo o currículo Lattes."
+      ))
+    }
+
+    paste(nrow(artigos()), "artigos encontrados no currículo.")
+  })
+
+  output$aviso_artigos <- renderText({
+    if (is.null(input$lattes)) {
+      return("Envie o currículo na aba Dados do docente.")
+    }
+    
+    paste0(
+      nrow(artigos()), " artigos no currículo, ",
+      nrow(percentis()), " no período de avaliação (",
+      periodo()$ano_inicio, " a ", periodo()$ano_fim, ")."
+    )
+  })
+  
+  output$artigos <- renderTable({
+    percentis() |>
+      select(
+        Ano = ano,
+        Revista = revista,
+        Artigo = titulo,
+        ISSN = issn,
+        Percentil = percentil,
+        Situação = situacao
+      )
+  }, digits = 3)
+  
+  output$resultado <- renderText({
+    if (is.null(input$lattes)) {
+      return("A avaliação ainda não foi realizada.")
+    }
+    
+    p <- pontos()
+    
+    paste0(
+      "Pontuação: ", format(round(p$pontuacao, 3), decimal.mark = ","),
+      " (mínimo ", format(p$minimo, decimal.mark = ","), ") - ",
+      ifelse(p$atinge, "Atinge o mínimo", "Não atinge o mínimo")
+    )
+  })
+  
+  output$melhores <- renderTable({
+    pontos()$melhores |>
+      select(
+        Posição = posicao,
+        Ano = ano,
+        Revista = revista,
+        Artigo = titulo,
+        Percentil = percentil
+      )
+  }, digits = 3)
   
 }
 
