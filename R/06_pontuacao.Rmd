@@ -2,140 +2,133 @@
 title: "06 - Pontuação do docente"
 output: html_document
 params:
-  ano_inicio: 2022
-  ano_fim: 2025
+  arquivo: "dados/exemplo/curriculo_ficticio.xml"
+  inicio: "2022-01-01"
+  fim: "2025-12-31"
+  afastamentos: "2023-01-01 a 2023-12-31"
 ---
+
+Este arquivo calcula a pontuação de **qualquer docente**. Para usar com outro
+currículo, mude os `params` no topo:
+
+- `arquivo`: currículo Lattes (.zip, .xml ou .html), a partir da pasta do projeto;
+- `inicio` e `fim`: período de avaliação;
+- `afastamentos`: períodos no formato `AAAA-MM-DD a AAAA-MM-DD`, separados
+  por `;`. Deixe `""` se não houver afastamento.
+
+O exemplo usa um currículo **fictício** (`dados/exemplo/curriculo_ficticio.xml`),
+montado para testar cada regra. O resultado esperado está escrito no próprio
+arquivo.
 
 Regras usadas:
 
-- Cada artigo vale o **percentil da revista no ano em que foi publicado** (opção A).
-- Só contam artigos publicados no período de avaliação.
+- Cada artigo vale o **percentil da revista no ano em que foi publicado**.
+- O início do período recua pela soma dos dias de afastamento.
+- Artigos de anos sem SCImago, sem ISSN ou de revistas fora do SCImago não pontuam.
 - Artigos com percentil abaixo de 0,25 não pontuam.
 - A pontuação é a soma dos **4 melhores artigos** e precisa ser igual ou maior que 1,25.
 
-Antes de rodar, os scripts 01 a 05 precisam ter sido executados.
+Antes de rodar, os scripts 01 a 04 precisam ter sido executados.
 
-## 1. Conectar ao banco
+## 1. Carregar as funções e conectar ao banco
+
+As funções ficam em `R/funcoes_simulador.R` e são as mesmas que o app usa.
+Assim o relatório e o app dão sempre o mesmo resultado.
 
 ```{r}
-library(DBI) # Interface para trabalhar com bancos de dados.
-library(RSQLite) # Permite utilizar SQLite no R.
+source(here::here("R", "funcoes_simulador.R"))
 
 con <- dbConnect(
   SQLite(),
   here::here("dados/limpos", "simulador_ppge.sqlite")
 )
-
-# Período de avaliação (vem dos params, no topo do arquivo).
-# Nos blocos SQL, ?ano_inicio e ?ano_fim são trocados por estes valores.
-ano_inicio <- params$ano_inicio
-ano_fim <- params$ano_fim
 ```
 
-## 2. Percentil de cada artigo
+## 2. Período de avaliação
 
-Liga o artigo à revista pelo ISSN e pega o percentil da revista no ano do
-artigo. O `LEFT JOIN` mantém os artigos que não encontram percentil, para
-podermos ver quais ficaram de fora.
+Transforma o texto dos `params` em datas.
 
-Um ISSN pode apontar para mais de uma revista no SCImago, por isso o
-`MAX()` com `GROUP BY` garante uma linha por artigo.
+```{r}
+periodo <- as.Date(c(params$inicio, params$fim))
 
-```{sql connection=con, output.var="percentil_artigos"}
-SELECT a.rowid AS id_artigo,
-       a.ano,
-       a.titulo,
-       a.revista,
-       a.issn,
-       MAX(p.percentil) AS percentil
-FROM artigos_docente AS a
-LEFT JOIN issn_revista AS i
-       ON i.issn = a.issn
-LEFT JOIN percentil_revista_ano AS p
-       ON p.Sourceid = i.Sourceid
-      AND p.ano = a.ano
-WHERE a.ano BETWEEN ?ano_inicio AND ?ano_fim
-GROUP BY a.rowid
-ORDER BY percentil DESC
+# "2023-01-01 a 2023-12-31; 2025-03-01 a 2025-12-31"
+# vira uma lista com um par de datas para cada afastamento
+afastamentos <- params$afastamentos |>
+  str_split_1(";") |>
+  str_squish() |>
+  Filter(f = \(x) x != "") |>
+  lapply(\(x) as.Date(str_split_1(x, " a ")))
+
+afastamentos
 ```
 
 ```{r}
-percentil_artigos
+periodo_final <- calcular_periodo(periodo, afastamentos)
+
+periodo_final
 ```
 
-## 3. Artigos sem percentil
+O período original começa em `r params$inicio`. Com
+`r periodo_final$dias_afastado` dias de afastamento, ele passa a começar em
+`r periodo_final$inicio_recuado`, ou seja, contam os artigos de
+**`r periodo_final$ano_inicio` a `r periodo_final$ano_fim`**.
 
-Ou a revista não está no SCImago, ou não há SCImago para o ano do artigo.
+## 3. Artigos do currículo
 
-```{sql connection=con}
-SELECT a.ano, a.revista, a.issn,
-       CASE
-         WHEN i.Sourceid IS NULL THEN 'Revista não encontrada no SCImago'
-         ELSE 'Sem percentil no ano do artigo'
-       END AS motivo
-FROM artigos_docente AS a
-LEFT JOIN issn_revista AS i ON i.issn = a.issn
-WHERE a.ano BETWEEN ?ano_inicio AND ?ano_fim
-  AND NOT EXISTS (
-    SELECT 1
-    FROM percentil_revista_ano AS p
-    WHERE p.Sourceid = i.Sourceid
-      AND p.ano = a.ano
-  )
-GROUP BY a.rowid
+`ler_artigos_lattes()` descobre sozinha se o arquivo é .zip, .xml ou .html.
+
+```{r}
+artigos <- ler_artigos_lattes(here::here(params$arquivo))
+
+nrow(artigos)
+
+artigos |>
+  select(ano, issn, revista, titulo)
 ```
 
-## 4. Os 4 melhores artigos válidos
+## 4. Percentil de cada artigo do período
 
-`ROW_NUMBER()` numera os artigos do maior para o menor percentil.
+`percentil_artigos()` liga cada artigo à revista pelo ISSN (tabela
+`issn_revista`) e pega o percentil da revista no ano do artigo (tabela
+`percentil_revista_ano`). A consulta SQL está dentro da função.
 
-```{sql connection=con}
-PRAGMA table_info(artigos_docente)
-```
-
-
-```{sql connection=con, output.var="melhores"}
-WITH pontos AS (
-  SELECT a.rowid AS id_artigo,
-         a.ano,
-         a.titulo,
-         a.revista,
-         MAX(p.percentil) AS percentil
-  FROM artigos_docente AS a
-  JOIN issn_revista AS i
-    ON i.issn = a.issn
-  JOIN percentil_revista_ano AS p
-    ON p.Sourceid = i.Sourceid
-   AND p.ano = a.ano
-  WHERE a.ano BETWEEN ?ano_inicio AND ?ano_fim
-  GROUP BY a.rowid
-  HAVING MAX(p.percentil) >= 0.25
-),
-ranking AS (
-  SELECT *,
-         ROW_NUMBER() OVER (ORDER BY percentil DESC) AS posicao
-  FROM pontos
+```{r}
+percentis <- percentil_artigos(
+  con,
+  artigos,
+  ano_inicio = periodo_final$ano_inicio,
+  ano_fim = periodo_final$ano_fim
 )
-SELECT posicao, ano, revista, titulo, percentil
-FROM ranking
-WHERE posicao <= 4
-ORDER BY posicao
+
+percentis |>
+  select(ano, revista, percentil, situacao)
 ```
 
+## 5. Artigos que não pontuam
+
 ```{r}
-melhores
+percentis |>
+  filter(situacao != "Válido") |>
+  count(situacao, name = "artigos")
 ```
 
-## 5. Resultado
+## 6. Os 4 melhores artigos válidos
 
 ```{r}
-pontuacao <- sum(melhores$percentil)
+pontos <- calcular_pontuacao(percentis)
 
+pontos$melhores
+```
+
+## 7. Resultado
+
+```{r}
 data.frame(
-  artigos_considerados = nrow(melhores),
-  pontuacao = round(pontuacao, 3),
-  minimo = 1.25,
-  resultado = ifelse(pontuacao >= 1.25, "Atinge o mínimo", "Não atinge o mínimo")
+  periodo = paste(periodo_final$ano_inicio, "a", periodo_final$ano_fim),
+  artigos_considerados = nrow(pontos$melhores),
+  pontuacao = round(pontos$pontuacao, 3),
+  minimo = pontos$minimo,
+  resultado = ifelse(pontos$atinge, "Atinge o mínimo", "Não atinge o mínimo")
 )
 ```
 

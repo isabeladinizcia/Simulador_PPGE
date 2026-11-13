@@ -209,6 +209,7 @@ percentil_artigos <- function(con, artigos, ano_inicio, ano_fim) {
   resultado |>
     mutate(
       situacao = case_when(
+        is.na(issn) ~ "Sem ISSN no currículo",
         no_scimago == 0 ~ "Revista não encontrada no SCImago",
         is.na(percentil) ~ "Sem percentil no ano do artigo",
         percentil < 0.25 ~ "Percentil abaixo de 0,25",
@@ -280,5 +281,45 @@ calcular_periodo <- function(periodo, afastamentos = list()) {
     inicio_recuado = inicio_recuado,
     ano_inicio = as.integer(format(inicio_recuado, "%Y")),
     ano_fim = as.integer(format(periodo[2], "%Y"))
+  )
+}
+
+# ============================================================
+# 6. AVALIAÇÃO COMPLETA DE UM DOCENTE
+# ============================================================
+
+# Junta todas as etapas em uma função só. É ela que o app e o
+# relatório usam, para os dois darem sempre o mesmo resultado.
+#
+# - con: conexão com o banco simulador_ppge.sqlite;
+# - arquivo: currículo Lattes (.zip, .xml ou .html);
+# - periodo: vetor com duas datas (início e fim da avaliação);
+# - afastamentos: lista em que cada item tem duas datas.
+avaliar_docente <- function(con, arquivo, periodo, afastamentos = list()) {
+  # 1. Ler os artigos do currículo
+  artigos <- ler_artigos_lattes(arquivo)
+
+  # 2. Período de avaliação, já recuado pelos afastamentos
+  periodo_final <- calcular_periodo(periodo, afastamentos)
+
+  # 3. Percentil e situação de cada artigo do período
+  percentis <- percentil_artigos(
+    con,
+    artigos,
+    ano_inicio = periodo_final$ano_inicio,
+    ano_fim = periodo_final$ano_fim
+  )
+
+  # 4. Pontuação: soma dos 4 melhores artigos válidos
+  pontos <- calcular_pontuacao(percentis)
+
+  list(
+    artigos = artigos,
+    periodo = periodo_final,
+    percentis = percentis,
+    melhores = pontos$melhores,
+    pontuacao = pontos$pontuacao,
+    minimo = pontos$minimo,
+    atinge = pontos$atinge
   )
 }

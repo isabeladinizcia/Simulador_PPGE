@@ -7,16 +7,13 @@
 source("R/funcoes_simulador.R")
 
 # ============================================================
-# 2. TESTAR COM O CURRÍCULO DE EXEMPLO
+# 2. LER O CURRÍCULO
 # ============================================================
 
-# Coloque o currículo em dados/brutos. Pode ser o .zip ou o .xml
-# baixado do Lattes, ou o HTML salvo do navegador.
-arquivo <- list.files(
-  "dados/brutos",
-  pattern = "[.](zip|xml|html?)$",
-  full.names = TRUE
-)[1]
+# Currículo fictício de exemplo. Para testar outro currículo,
+# troque o caminho: pode ser o .zip ou o .xml baixado do Lattes,
+# ou o HTML salvo do navegador.
+arquivo <- "dados/exemplo/curriculo_ficticio.xml"
 
 # ler_artigos_lattes() descobre o formato sozinha
 artigos_docente <- ler_artigos_lattes(arquivo)
@@ -33,7 +30,7 @@ artigos_docente |>
   select(ano, issn, referencia)
 
 # ============================================================
-# 3. GRAVAR NO BANCO E CONFERIR O CRUZAMENTO COM O SCIMAGO
+# 3. CONFERIR O CRUZAMENTO COM O SCIMAGO
 # ============================================================
 
 con <- dbConnect(
@@ -41,10 +38,14 @@ con <- dbConnect(
   file.path("dados/limpos", "simulador_ppge.sqlite")
 )
 
+# Os artigos vão para uma tabela TEMPORÁRIA, que some quando a
+# conexão fecha. Assim os dados do docente não ficam guardados
+# no banco.
 dbWriteTable(
   con,
   "artigos_docente",
   artigos_docente,
+  temporary = TRUE,
   overwrite = TRUE
 )
 
@@ -61,3 +62,4 @@ dbGetQuery(con, "
 # ============================================================
 
 dbDisconnect(con)
+

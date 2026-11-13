@@ -1,0 +1,201 @@
+---
+title: "Relatório de Credenciamento Docente"
+subtitle: "Simulador PPGE"
+lang: pt-BR
+output:
+  pdf_document:
+    latex_engine: pdflatex
+geometry: margin=2cm
+fontsize: 11pt
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{xcolor}
+  - \renewcommand{\arraystretch}{1.2}
+params:
+  nome: ""
+  area: ""
+  periodo: NULL
+  afastamentos: NULL
+  avaliacao: NULL
+---
+
+```{r configuracao, include = FALSE}
+# Este modelo é preenchido pelo app (aba Relatório).
+# - nome, area: campos da aba Dados do docente;
+# - periodo: duas datas (início e fim da avaliação);
+# - afastamentos: lista com um par de datas para cada afastamento;
+# - avaliacao: resultado de avaliar_docente() (R/funcoes_simulador.R).
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+av <- params$avaliacao
+
+# Números no padrão brasileiro: 0,999
+num <- function(x, casas = 3) {
+  ifelse(
+    is.na(x),
+    "--",
+    formatC(x, format = "f", digits = casas, decimal.mark = ",")
+  )
+}
+
+data_br <- function(x) format(as.Date(x), "%d/%m/%Y")
+
+# Escapa caracteres especiais do LaTeX (& % $ # _ { } ~ ^ \)
+# que podem aparecer em títulos de artigos e revistas
+tex <- function(x) {
+  x <- ifelse(is.na(x), "--", x)
+  x <- gsub("\\", "/", x, fixed = TRUE)
+  x <- gsub("([&%$#_{}])", "\\\\\\1", x)
+  x <- gsub("~", "\\\\textasciitilde{}", x)
+  gsub("\\^", "\\\\textasciicircum{}", x)
+}
+
+# Coluna de largura fixa, com texto alinhado à esquerda
+# (sem isso o LaTeX justifica e abre espaços grandes entre palavras)
+col <- function(largura) {
+  paste0(">{\\raggedright\\arraybackslash}p{", largura, "}")
+}
+
+# Tabela em LaTeX com colunas de largura fixa (o texto quebra
+# a linha em vez de sair da página)
+tabela <- function(dados, alinhamento) {
+  knitr::kable(
+    dados,
+    format = "latex",
+    booktabs = TRUE,
+    longtable = TRUE,
+    escape = FALSE,
+    align = alinhamento
+  )
+}
+
+nome <- if (nzchar(params$nome)) params$nome else "Não informado"
+area <- if (nzchar(params$area)) params$area else "Não informada"
+```
+
+**Docente:** `r tex(nome)`\
+**Área de atuação:** `r tex(area)`\
+**Relatório gerado em:** `r data_br(Sys.Date())`
+
+# Resultado
+
+```{r resultado, results = "asis"}
+cor <- if (av$atinge) "green!50!black" else "red!70!black"
+texto <- if (av$atinge) "ATINGE O MÍNIMO" else "NÃO ATINGE O MÍNIMO"
+
+cat(
+  "\\begin{center}\n",
+  "{\\Large Pontuação: \\textbf{", num(av$pontuacao), "}}\\\\[4pt]\n",
+  "Mínimo exigido: ", num(av$minimo, 2), "\\\\[6pt]\n",
+  "{\\Large\\color{", cor, "}\\textbf{", texto, "}}\n",
+  "\\end{center}\n",
+  sep = ""
+)
+```
+
+A pontuação é a soma dos percentis dos até 4 melhores artigos válidos
+publicados no período de avaliação. Neste relatório, foram considerados
+**`r nrow(av$melhores)` `r if (nrow(av$melhores) == 1) "artigo" else "artigos"`**.
+
+# Período de avaliação
+
+```{r periodo, results = "asis"}
+afast <- params$afastamentos
+
+cat(
+  "- **Período informado:** ", data_br(params$periodo[1]), " a ",
+  data_br(params$periodo[2]), "\n",
+  sep = ""
+)
+
+if (length(afast) == 0) {
+  cat("- **Afastamentos:** nenhum\n")
+} else {
+  cat("- **Afastamentos:**\n")
+  for (a in afast) {
+    cat("    - ", data_br(a[1]), " a ", data_br(a[2]), "\n", sep = "")
+  }
+}
+
+cat(
+  "- **Dias de afastamento dentro do período:** ",
+  av$periodo$dias_afastado, "\n",
+  "- **Início recuado para:** ", data_br(av$periodo$inicio_recuado), "\n",
+  "- **Anos considerados no cálculo:** ",
+  av$periodo$ano_inicio, " a ", av$periodo$ano_fim, "\n",
+  sep = ""
+)
+```
+
+# Artigos que entram na pontuação
+
+```{r melhores, results = "asis"}
+if (nrow(av$melhores) == 0) {
+  cat("Nenhum artigo válido no período.\n")
+} else {
+  av$melhores |>
+    transform(
+      revista = tex(revista),
+      titulo = tex(titulo),
+      percentil = num(percentil)
+    ) |>
+    setNames(c("\\#", "Ano", "Revista", "Artigo", "Percentil")) |>
+    tabela(c("c", "c", col("4.2cm"), col("7.6cm"), "r")) |>
+    print()
+
+  cat(
+    "\n\\begin{flushright}\\textbf{Total: ", num(av$pontuacao),
+    "}\\end{flushright}\n",
+    sep = ""
+  )
+}
+```
+
+# Todos os artigos do período
+
+Artigos do currículo publicados entre `r av$periodo$ano_inicio` e
+`r av$periodo$ano_fim`, com o percentil da revista no ano do artigo.
+
+```{r todos, results = "asis"}
+if (nrow(av$percentis) == 0) {
+  cat("Nenhum artigo do currículo foi publicado no período.\n")
+} else {
+  av$percentis |>
+    transform(
+      revista = tex(revista),
+      titulo = tex(titulo),
+      percentil = num(percentil),
+      situacao = tex(situacao)
+    ) |>
+    subset(select = c(ano, revista, titulo, percentil, situacao)) |>
+    setNames(c("Ano", "Revista", "Artigo", "Percentil", "Situação")) |>
+    tabela(c("c", col("3.6cm"), col("6.2cm"), "r", col("3cm"))) |>
+    print()
+}
+```
+
+Total de artigos no currículo: **`r nrow(av$artigos)`**. No período:
+**`r nrow(av$percentis)`**.
+
+# Regras utilizadas
+
+- Cada artigo vale o **percentil da revista no ano em que foi publicado**,
+  calculado a partir do SJR (SCImago Journal Rank). O percentil é a fração
+  das revistas da mesma categoria com SJR menor ou igual ao da revista.
+  Quando a revista está em mais de uma categoria, vale o maior percentil.
+- O início do período recua pela soma dos dias de afastamento.
+- Não pontuam: artigos com percentil abaixo de 0,25, de revistas fora do
+  SCImago, sem ISSN no currículo, ou de anos ainda sem dados do SCImago.
+- A pontuação é a soma dos 4 melhores artigos e precisa ser igual ou maior
+  que 1,25.
+
+**Fontes:** currículo Lattes enviado pelo docente; SCImago Journal Rank, anos
+de 2015 a 2025.
+
+\bigskip
+
+\begin{center}\small\textit{Este relatório é uma simulação e não substitui a
+avaliação oficial do programa.}\end{center}

@@ -179,9 +179,16 @@ ui <- navbarPage(
     
     fluidPage(
       h2("Relatório personalizado"),
-      
-      p("Nesta área será possível gerar um relatório
-        com os resultados da avaliação.")
+
+      p("Baixe um relatório em PDF com o período de avaliação,
+        os artigos considerados, a pontuação e o resultado."),
+
+      h4(textOutput("resumo_relatorio")),
+
+      br(),
+
+      # Só aparece depois que o currículo é enviado
+      uiOutput("botao_relatorio")
     )
   ),
   
@@ -220,7 +227,9 @@ server <- function(input, output, session) {
       id <- paste0("afastamento_", i)
       anterior <- isolate(input[[id]])
 
-      dateRangeInput(
+      # NA deixa o campo vazio; o Shiny avisa no console que não
+      # conseguiu converter NA em data, por isso o suppressWarnings
+      suppressWarnings(dateRangeInput(
         id,
         paste0("Afastamento ", i, ":"),
         start = if (is.null(anterior)) NA else anterior[1],
@@ -228,18 +237,23 @@ server <- function(input, output, session) {
         format = "dd/mm/yyyy",
         separator = "até",
         language = "pt-BR"
-      )
+      ))
     })
   })
 
   # Período de avaliação já recuado pelos afastamentos
-  periodo <- reactive({
-    afastamentos <- lapply(
+  # Lista de afastamentos preenchidos (um par de datas cada).
+  # Os incompletos ficam de fora.
+  afastamentos <- reactive({
+    lapply(
       seq_len(n_afastamentos()),
       function(i) input[[paste0("afastamento_", i)]]
-    )
+    ) |>
+      Filter(f = function(a) length(a) == 2 && !anyNA(a))
+  })
 
-    calcular_periodo(input$periodo, afastamentos)
+  periodo <- reactive({
+    calcular_periodo(input$periodo, afastamentos())
   })
 
   output$periodo_considerado <- renderText({
@@ -319,18 +333,23 @@ server <- function(input, output, session) {
       )
   }, digits = 3)
   
-  output$resultado <- renderText({
-    if (is.null(input$lattes)) {
-      return("A avaliação ainda não foi realizada.")
-    }
-    
+  # Frase do resultado, usada nas abas Resultado e Relatório
+  texto_resultado <- reactive({
     p <- pontos()
-    
+
     paste0(
       "Pontuação: ", format(round(p$pontuacao, 3), decimal.mark = ","),
       " (mínimo ", format(p$minimo, decimal.mark = ","), ") - ",
       ifelse(p$atinge, "Atinge o mínimo", "Não atinge o mínimo")
     )
+  })
+
+  output$resultado <- renderText({
+    if (is.null(input$lattes)) {
+      return("A avaliação ainda não foi realizada.")
+    }
+
+    texto_resultado()
   })
   
   output$melhores <- renderTable({
@@ -343,7 +362,105 @@ server <- function(input, output, session) {
         Percentil = percentil
       )
   }, digits = 3)
-  
+
+  # ---------- RELATÓRIO ----------
+
+  output$resumo_relatorio <- renderText({
+    if (is.null(input$lattes)) {
+      return("Envie o currículo na aba Dados do docente para gerar o relatório.")
+    }
+
+    texto_resultado()
+  })
+
+  output$botao_relatorio <- renderUI({
+    req(input$lattes)
+    downloadButton("baixar_relatorio", "Baixar relatório (PDF)")
+  })
+
+  output$baixar_relatorio <- downloadHandler(
+
+    filename = function() {
+      nome <- if (nzchar(input$nome)) input$nome else "docente"
+      # Nome do arquivo sem acentos e espaços
+      nome <- iconv(nome, to = "ASCII//TRANSLIT")
+      nome <- gsub("[^A-Za-z0-9]+", "_", nome)
+      paste0("relatorio_", nome, "_", format(Sys.Date(), "%Y%m%d"), ".pdf")
+    },
+
+    content = function(file) {
+      # O mesmo resultado mostrado nas outras abas
+      avaliacao <- list(
+        artigos = artigos(),
+        periodo = periodo(),
+        percentis = percentis(),
+        melhores = pontos()$melhores,
+        pontuacao = pontos()$pontuacao,
+        minimo = pontos()$minimo,
+        atinge = pontos()$atinge
+      )
+
+      # O PDF é montado numa pasta temporária, para dois docentes
+      # baixando ao mesmo tempo não se atrapalharem
+      pasta <- tempfile("relatorio_")
+      dir.create(pasta)
+      modelo <- file.path(pasta, "relatorio_docente.Rmd")
+      file.copy(here("relatorio", "relatorio_docente.Rmd"), modelo)
+
+      id <- showNotification(
+        "Gerando o relatório...",
+        duration = NULL,
+        closeButton = FALSE
+      )
+      on.exit(removeNotification(id), add = TRUE)
+
+      tryCatch(
+        {
+          # O PDF é gerado dentro da pasta temporária (onde também
+          # ficam os arquivos do LaTeX) e depois copiado para o download
+          pdf <- rmarkdown::render(
+            modelo,
+            output_dir = pasta,
+            intermediates_dir = pasta,
+            envir = new.env(),
+            quiet = TRUE,
+            params = list(
+              nome = input$nome,
+              area = input$area,
+              periodo = input$periodo,
+              afastamentos = afastamentos(),
+              avaliacao = avaliacao
+            )
+          )
+
+          file.copy(pdf, file, overwrite = TRUE)
+        },
+
+        # Se o PDF não puder ser gerado, mostra o motivo na tela e
+        # no console, em vez de o navegador baixar uma página de erro
+        error = function(e) {
+          # Erros do LaTeX ficam no arquivo .log, nas linhas com "!"
+          logs <- list.files(pasta, pattern = "[.]log$", full.names = TRUE)
+          erros_latex <- unlist(lapply(logs, function(l) {
+            grep("^!", readLines(l, warn = FALSE), value = TRUE)
+          }))
+
+          motivo <- paste(c(conditionMessage(e), head(erros_latex, 3)), collapse = "\n")
+
+          message("Erro ao gerar o relatório:\n", motivo)
+
+          showNotification(
+            paste("Não foi possível gerar o PDF:", motivo),
+            type = "error",
+            duration = NULL
+          )
+
+          stop(e)
+        }
+      )
+    }
+  )
+
 }
 
 shinyApp(ui = ui, server = server)

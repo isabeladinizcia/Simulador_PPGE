@@ -6,3 +6,7 @@
 # Banco de dados: passa de 100 MB (limite do GitHub).
 # É recriado rodando os scripts 02_banco_dados.R e 03_percentis.R.
 dados/limpos/*.sqlite
+
+# Relatório do 06: traz os artigos do docente usado no teste.
+# É recriado rodando o 06_pontuacao.Rmd (Knit).
+R/06_pontuacao.html
