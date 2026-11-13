@@ -323,3 +323,132 @@ avaliar_docente <- function(con, arquivo, periodo, afastamentos = list()) {
     atinge = pontos$atinge
   )
 }
+
+# ============================================================
+# 7. CONSULTAS PARA A ABA SIMULAÇÃO
+# ============================================================
+
+# Lista de revistas para a caixa de busca do app.
+# O rótulo mostra o nome e um ISSN, para diferenciar revistas
+# com nomes parecidos.
+listar_revistas <- function(con) {
+  # No SQLite, com MAX(ano) no SELECT, o Title vem da mesma linha
+  # do ano mais recente (nome atual da revista).
+  dbGetQuery(con, "
+    WITH ultima AS (
+      SELECT Sourceid, Title, MAX(ano) AS ano
+      FROM percentil_revista_ano
+      GROUP BY Sourceid
+    ),
+    um_issn AS (
+      SELECT Sourceid, MIN(issn) AS issn
+      FROM issn_revista
+      GROUP BY Sourceid
+    )
+    SELECT u.Sourceid,
+           u.Title || ' (' || COALESCE(i.issn, 'sem ISSN') || ')' AS rotulo
+    FROM ultima AS u
+    LEFT JOIN um_issn AS i ON i.Sourceid = u.Sourceid
+    ORDER BY u.Title
+  ")
+}
+
+# Lista das áreas (categorias do SCImago)
+listar_categorias <- function(con) {
+  dbGetQuery(con, "
+    SELECT DISTINCT categoria FROM categorias ORDER BY categoria
+  ")$categoria
+}
+
+# Percentil de uma revista em todos os anos (o maior percentil
+# entre as categorias dela, que é o que vale na pontuação)
+historico_revista <- function(con, sourceid) {
+  dbGetQuery(
+    con,
+    "
+    SELECT CAST(ano AS INTEGER) AS ano, Title AS revista,
+           categoria_percentil AS categoria,
+           SJR, quartil, percentil
+    FROM percentil_revista_ano
+    WHERE Sourceid = ?
+    ORDER BY ano
+    ",
+    params = list(sourceid)
+  )
+}
+
+# Percentil de todas as revistas de uma área, em cada ano.
+# Aqui o percentil é calculado só dentro desta área (mesma conta
+# do 03_percentis.R, feita em SQL com CUME_DIST).
+historico_categoria <- function(con, categoria) {
+  dbGetQuery(
+    con,
+    "
+    SELECT Sourceid, Title AS revista, CAST(ano AS INTEGER) AS ano,
+           SJR, quartil,
+           CUME_DIST() OVER (PARTITION BY ano ORDER BY SJR) AS percentil
+    FROM categorias
+    WHERE categoria = ?
+      AND SJR IS NOT NULL
+    ",
+    params = list(categoria)
+  )
+}
+
+# Percentil de um artigo hipotético: revista + ano.
+# Se o ano ainda não tem SCImago (ex.: 2026), usa o ano mais
+# recente da revista como ESTIMATIVA.
+percentil_hipotetico <- function(con, sourceid, ano) {
+  historico <- historico_revista(con, sourceid)
+
+  if (nrow(historico) == 0) {
+    return(list(percentil = NA, ano_usado = NA, estimado = FALSE))
+  }
+
+  if (ano %in% historico$ano) {
+    linha <- historico[historico$ano == ano, ]
+    estimado <- FALSE
+  } else if (ano > max(historico$ano)) {
+    linha <- historico[historico$ano == max(historico$ano), ]
+    estimado <- TRUE
+  } else {
+    # Ano antigo em que a revista não estava no SCImago
+    return(list(percentil = NA, ano_usado = NA, estimado = FALSE))
+  }
+
+  list(
+    percentil = linha$percentil,
+    ano_usado = linha$ano,
+    estimado = estimado
+  )
+}
+
+# Junta os artigos reais (do currículo) com os hipotéticos e
+# recalcula a pontuação.
+# - percentis: resultado de percentil_artigos() (pode ser NULL);
+# - hipoteticos: data.frame com ano, revista e percentil.
+simular_pontuacao <- function(percentis, hipoteticos) {
+  reais <- if (is.null(percentis)) {
+    tibble(ano = integer(), revista = character(), titulo = character(),
+           percentil = numeric(), situacao = character())
+  } else {
+    percentis |>
+      mutate(titulo = paste0(titulo, " (currículo)"))
+  }
+
+  hip <- hipoteticos |>
+    mutate(
+      titulo = "Artigo hipotético",
+      situacao = case_when(
+        is.na(percentil) ~ "Sem percentil no ano do artigo",
+        percentil < 0.25 ~ "Percentil abaixo de 0,25",
+        TRUE ~ "Válido"
+      )
+    )
+
+  bind_rows(
+    select(reais, ano, revista, titulo, percentil, situacao),
+    select(hip, ano, revista, titulo, percentil, situacao)
+  ) |>
+    calcular_pontuacao()
+}

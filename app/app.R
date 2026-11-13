@@ -165,11 +165,83 @@ ui <- navbarPage(
     
     fluidPage(
       h2("Simulação e previsões"),
-      
-      p("Aqui será possível explorar cenários de publicação
-        e possíveis pontuações futuras."),
-      
-      p("As previsões serão implementadas posteriormente.")
+
+      tabsetPanel(
+
+        # 6a. Artigos hipotéticos
+        tabPanel(
+          "Simular novos artigos",
+
+          br(),
+
+          p("Escolha uma revista e o ano de publicação para ver como
+            um novo artigo mudaria a sua pontuação. Os artigos do
+            currículo enviado também entram na conta."),
+
+          p(em("Para anos que ainda não têm SCImago, o percentil é
+            estimado pelo ano mais recente da revista.")),
+
+          fluidRow(
+            column(
+              6,
+              selectizeInput(
+                "sim_revista",
+                "Revista:",
+                choices = NULL,
+                options = list(placeholder = "Digite o nome ou o ISSN")
+              )
+            ),
+            column(
+              3,
+              numericInput(
+                "sim_ano",
+                "Ano de publicação:",
+                value = as.integer(format(Sys.Date(), "%Y")),
+                min = 2015,
+                max = 2035,
+                step = 1
+              )
+            ),
+            column(
+              3,
+              br(),
+              actionButton("sim_adicionar", "Adicionar artigo"),
+              actionButton("sim_limpar", "Limpar")
+            )
+          ),
+
+          h4("Artigos hipotéticos"),
+          tableOutput("sim_hipoteticos"),
+
+          h3(textOutput("sim_comparacao")),
+
+          h4("Os 4 melhores artigos com a simulação"),
+          tableOutput("sim_melhores")
+        ),
+
+        # 6b. Histórico de uma área
+        tabPanel(
+          "Histórico por área",
+
+          br(),
+
+          p("Percentil das revistas de uma área em cada ano,
+            calculado só dentro da área escolhida. Selecione
+            revistas na tabela para comparar no gráfico."),
+
+          selectizeInput(
+            "hist_area",
+            "Área:",
+            choices = NULL,
+            width = "100%",
+            options = list(placeholder = "Digite o nome da área")
+          ),
+
+          plotOutput("hist_area_grafico", height = "350px"),
+
+          DT::DTOutput("hist_area_tabela")
+        )
+      )
     )
   ),
   
@@ -362,6 +434,165 @@ server <- function(input, output, session) {
         Percentil = percentil
       )
   }, digits = 3)
+
+  # ---------- SIMULAÇÃO ----------
+
+  # Listas das caixas de busca. server = TRUE: o navegador só
+  # recebe as revistas que combinam com o que foi digitado
+  # (são mais de 50 mil revistas). selected = character(0) deixa
+  # a caixa vazia no início.
+  revistas <- listar_revistas(con)
+  opcoes_revistas <- setNames(revistas$Sourceid, revistas$rotulo)
+
+  updateSelectizeInput(session, "sim_revista",
+                       choices = opcoes_revistas, selected = character(0),
+                       server = TRUE)
+  updateSelectizeInput(session, "hist_area",
+                       choices = listar_categorias(con), selected = character(0),
+                       server = TRUE)
+
+  # Artigos hipotéticos adicionados pelo docente
+  hipoteticos <- reactiveVal(
+    data.frame(ano = integer(), revista = character(),
+               percentil = numeric(), observacao = character())
+  )
+
+  observeEvent(input$sim_adicionar, {
+    req(input$sim_revista, input$sim_ano)
+
+    sourceid <- as.numeric(input$sim_revista)
+    ano <- as.integer(input$sim_ano)
+    p <- percentil_hipotetico(con, sourceid, ano)
+
+    observacao <- if (is.na(p$percentil)) {
+      "Revista sem SCImago neste ano"
+    } else if (p$estimado) {
+      paste("Estimado pelo SCImago", p$ano_usado)
+    } else {
+      paste("SCImago", p$ano_usado)
+    }
+
+    nova <- data.frame(
+      ano = ano,
+      revista = revistas$rotulo[revistas$Sourceid == sourceid][1],
+      percentil = p$percentil,
+      observacao = observacao
+    )
+
+    hipoteticos(rbind(hipoteticos(), nova))
+  })
+
+  observeEvent(input$sim_limpar, {
+    hipoteticos(hipoteticos()[0, ])
+  })
+
+  output$sim_hipoteticos <- renderTable({
+    validate(need(nrow(hipoteticos()) > 0,
+                  "Nenhum artigo hipotético adicionado ainda."))
+
+    hipoteticos() |>
+      select(Ano = ano, Revista = revista, Percentil = percentil,
+             Observação = observacao)
+  }, digits = 3)
+
+  # Pontuação com os artigos hipotéticos. Sem currículo enviado,
+  # conta só os hipotéticos.
+  simulacao <- reactive({
+    reais <- if (is.null(input$lattes)) NULL else percentis()
+    simular_pontuacao(reais, hipoteticos())
+  })
+
+  output$sim_comparacao <- renderText({
+    req(nrow(hipoteticos()) > 0)
+
+    atual <- if (is.null(input$lattes)) 0 else pontos()$pontuacao
+    s <- simulacao()
+    fmt <- function(x) format(round(x, 3), nsmall = 3, decimal.mark = ",")
+
+    paste0(
+      "Pontuação atual: ", fmt(atual),
+      "  ->  com a simulação: ", fmt(s$pontuacao),
+      " (", ifelse(s$atinge, "atinge", "não atinge"), " o mínimo de 1,25)"
+    )
+  })
+
+  output$sim_melhores <- renderTable({
+    req(nrow(hipoteticos()) > 0)
+
+    simulacao()$melhores |>
+      select(Posição = posicao, Ano = ano, Revista = revista,
+             Artigo = titulo, Percentil = percentil)
+  }, digits = 3)
+
+  # Histórico de uma área
+  hist_area <- reactive({
+    req(input$hist_area)
+    historico_categoria(con, input$hist_area)
+  })
+
+  # Tabela larga: uma linha por revista, uma coluna por ano.
+  # Ordenada pelo percentil do ano mais recente.
+  hist_area_larga <- reactive({
+    dados <- hist_area()
+    ultimo <- max(dados$ano)
+
+    dados |>
+      group_by(Sourceid) |>
+      mutate(revista = revista[which.max(ano)]) |>
+      ungroup() |>
+      select(Sourceid, revista, ano, percentil) |>
+      mutate(percentil = round(percentil, 3)) |>
+      tidyr::pivot_wider(names_from = ano, values_from = percentil,
+                         names_sort = TRUE) |>
+      arrange(desc(.data[[as.character(ultimo)]]))
+  })
+
+  output$hist_area_tabela <- DT::renderDT({
+    DT::datatable(
+      select(hist_area_larga(), -Sourceid),
+      rownames = FALSE,
+      colnames = c("Revista" = "revista"),
+      selection = list(mode = "multiple", selected = 1:3),
+      options = list(pageLength = 10, scrollX = TRUE,
+                     language = list(
+                       search = "Buscar:",
+                       lengthMenu = "Mostrar _MENU_ revistas",
+                       info = "Revistas _START_ a _END_ de _TOTAL_",
+                       infoEmpty = "Nenhuma revista",
+                       infoFiltered = "(filtradas de _MAX_)",
+                       zeroRecords = "Nenhuma revista encontrada",
+                       paginate = list(previous = "Anterior", `next` = "Próxima")
+                     ))
+    )
+  })
+
+  output$hist_area_grafico <- renderPlot({
+    linhas <- input$hist_area_tabela_rows_selected
+    validate(need(length(linhas) > 0,
+                  "Selecione revistas na tabela para ver no gráfico."))
+
+    escolhidas <- hist_area_larga()$Sourceid[linhas]
+
+    dados <- hist_area() |>
+      filter(Sourceid %in% escolhidas) |>
+      group_by(Sourceid) |>
+      mutate(revista = revista[which.max(ano)]) |>
+      ungroup()
+
+    ggplot2::ggplot(dados, ggplot2::aes(ano, percentil, colour = revista)) +
+      ggplot2::geom_hline(yintercept = 0.25, linetype = "dashed",
+                          colour = "grey50") +
+      ggplot2::geom_line(linewidth = 1) +
+      ggplot2::geom_point(size = 2.5) +
+      ggplot2::scale_x_continuous(breaks = sort(unique(hist_area()$ano))) +
+      ggplot2::scale_y_continuous(limits = c(0, 1),
+                                  breaks = seq(0, 1, 0.25)) +
+      ggplot2::labs(title = input$hist_area, x = "Ano", y = "Percentil",
+                    colour = NULL) +
+      ggplot2::theme_minimal(base_size = 14) +
+      ggplot2::theme(legend.position = "bottom",
+                     legend.direction = "vertical")
+  })
 
   # ---------- RELATÓRIO ----------
 
