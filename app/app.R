@@ -6,7 +6,68 @@ source(here("R", "funcoes_simulador.R"))
 
 arquivo_banco <- here("dados/limpos", "simulador_ppge.sqlite")
 
-ui <- navbarPage(
+# Listas das caixas de busca da aba Simulação. Ficam fora do
+# server para serem montadas UMA vez, quando o app liga, e não
+# a cada pessoa que abre o app (a de revistas leva ~1,5 s).
+con_inicio <- dbConnect(SQLite(), arquivo_banco)
+revistas <- listar_revistas(con_inicio)
+categorias_scimago <- listar_categorias(con_inicio)
+dbDisconnect(con_inicio)
+
+opcoes_revistas <- setNames(revistas$Sourceid, revistas$rotulo)
+
+# ============================================================
+# SENHA DE ACESSO
+# ============================================================
+
+# A senha NÃO fica escrita no código (o repositório está no
+# GitHub). Ela fica no arquivo .Renviron, na pasta do projeto,
+# que está no .gitignore. O arquivo tem uma linha:
+#   SIMULADOR_SENHA=a_senha_escolhida
+#
+# Se a senha já estiver definida (por exemplo, configurada no
+# painel do servidor), ela vale e o .Renviron não é lido.
+if (!nzchar(Sys.getenv("SIMULADOR_SENHA")) && file.exists(here(".Renviron"))) {
+  readRenviron(here(".Renviron"))
+}
+senha_correta <- Sys.getenv("SIMULADOR_SENHA")
+
+# Tela que aparece antes do simulador
+ui_login <- fluidPage(
+  div(
+    style = "max-width: 380px; margin: 12vh auto 0;",
+
+    h2("Simulador PPGE"),
+
+    p("Acesso restrito aos docentes do programa. Digite a senha
+      fornecida pela secretaria do PPGE."),
+
+    passwordInput("senha", "Senha:", width = "100%"),
+
+    actionButton("entrar", "Entrar", class = "btn-primary"),
+
+    br(), br(),
+
+    textOutput("erro_login"),
+
+    # Enter no campo de senha também entra
+    tags$script(HTML(
+      "$(document).on('keyup', '#senha', function(e) {
+         if (e.key === 'Enter') $('#entrar').click();
+       });"
+    ))
+  )
+)
+
+# A página mostra a tela de login ou o simulador, conforme a
+# pessoa já tenha digitado a senha certa (decidido no server)
+ui <- fluidPage(
+  title = "Simulador PPGE",
+  style = "padding: 0;",
+  uiOutput("pagina")
+)
+
+ui_simulador <- navbarPage(
   
   title = "Simulador PPGE",
   
@@ -26,13 +87,25 @@ ui <- navbarPage(
       
       h3("Como funciona?"),
       
-      p("1. Informe seus dados e envie seu currículo Lattes."),
+      p("1. Informe seus dados e envie seu currículo Lattes em XML."),
       p("2. Confira os artigos identificados pelo sistema."),
       p("3. Consulte os critérios de credenciamento."),
       p("4. Visualize sua pontuação e o resultado."),
       
+      h3("Privacidade dos seus dados"),
+
+      tags$ul(
+        tags$li("O currículo enviado é usado apenas para fazer o
+          cálculo, enquanto você está com o simulador aberto."),
+        tags$li("Nenhum dado do docente fica guardado: ao fechar o
+          simulador, o currículo e os resultados são apagados do
+          servidor."),
+        tags$li("O relatório em PDF é gerado só no momento do download
+          e é de uso único e exclusivo do próprio docente.")
+      ),
+
       br(),
-      
+
       p("Comece pela aba Dados do docente.")
     )
   ),
@@ -81,22 +154,37 @@ ui <- navbarPage(
       
       fileInput(
         "lattes",
-        "Enviar currículo Lattes",
-        accept = c(".zip", ".xml", ".html", ".htm")
+        "Enviar currículo Lattes em XML",
+        accept = c(".zip", ".xml"),
+        buttonLabel = "Escolher arquivo",
+        placeholder = "Nenhum arquivo escolhido"
       ),
 
-      p("Formatos aceitos:"),
+      p("O simulador aceita apenas o currículo Lattes em XML.
+        Só o próprio docente consegue baixar o seu currículo nesse
+        formato, entrando na Plataforma Lattes com o seu login. Assim,
+        ninguém consegue simular o currículo de outra pessoa."),
 
       tags$ul(
-        tags$li("XML (recomendado): o próprio dono do currículo baixa
-          o arquivo .zip pela plataforma Lattes. Pode enviar o .zip
-          direto, ou o .xml que está dentro dele."),
-        tags$li("HTML: abra o currículo, clique com o botão direito,
-          escolha \"Exibir código-fonte\" e salve a página (Ctrl+S).
-          A página normal salva com Ctrl+S também funciona.")
+        tags$li("Na Plataforma Lattes, o currículo em XML é baixado
+          como um arquivo .zip. Pode enviar o .zip direto, ou o .xml
+          que está dentro dele."),
+        tags$li(
+          "Não sabe como baixar? Veja o ",
+          tags$a(
+            "guia passo a passo para gerar o XML do Lattes",
+            href = "https://www2.ufjf.br/propp/2024/11/13/como-gerar-o-arquivo-xml-do-curriculo-lattes/",
+            target = "_blank",
+            rel = "noopener"
+          ),
+          " (Pró-Reitoria de Pós-Graduação e Pesquisa da UFJF)."
+        )
       ),
 
-      textOutput("leitura_lattes")
+      textOutput("leitura_lattes"),
+
+      p(em("O currículo é usado só para o cálculo e é apagado
+        quando você fecha o simulador. Nenhum dado fica guardado."))
     )
   ),
   
@@ -124,18 +212,33 @@ ui <- navbarPage(
       h2("Critérios de credenciamento"),
       
       h4("Pontuação dos artigos"),
-      
-      p("Será considerado o maior percentil alcançado
-        pela revista no período de referência."),
-      
-      p("Somente revistas com percentil igual ou superior
-        a 0,25 serão consideradas."),
 
-      p("Artigos publicados em anos que ainda não têm SCImago
-        (por exemplo, 2026) ficam sem percentil e não pontuam."),
-      
+      p("Cada artigo vale o percentil da revista no ano em que
+        o artigo foi publicado, calculado a partir do SJR
+        (SCImago Journal Rank)."),
+
+      p("O percentil é a fração das revistas da mesma área com SJR
+        menor ou igual ao da revista. Quando a revista está em mais
+        de uma área, vale o maior percentil."),
+
+      h4("Artigos que não pontuam"),
+
+      tags$ul(
+        tags$li("Percentil abaixo de 0,25."),
+        tags$li("Revista que não está no SCImago."),
+        tags$li("Artigo sem ISSN no currículo."),
+        tags$li("Artigo publicado em ano que ainda não tem SCImago
+          (por exemplo, 2026).")
+      ),
+
+      h4("Período de avaliação e afastamentos"),
+
+      p("Contam os artigos publicados no período de avaliação.
+        O tempo de afastamento é somado e o início do período
+        recua por esse total."),
+
       h4("Pontuação mínima"),
-      
+
       p("A soma dos quatro artigos de maior pontuação
         deverá ser igual ou superior a 1,25."),
       
@@ -255,6 +358,10 @@ ui <- navbarPage(
       p("Baixe um relatório em PDF com o período de avaliação,
         os artigos considerados, a pontuação e o resultado."),
 
+      p(em("O relatório é de uso único e exclusivo do próprio
+        docente. Ele é gerado só no momento do download e não fica
+        guardado no servidor.")),
+
       h4(textOutput("resumo_relatorio")),
 
       br(),
@@ -262,21 +369,11 @@ ui <- navbarPage(
       # Só aparece depois que o currículo é enviado
       uiOutput("botao_relatorio")
     )
-  ),
-  
-  # 8. ADMINISTRAÇÃO
-  tabPanel(
-    "Administração",
-    
-    fluidPage(
-      h2("Área administrativa"),
-      
-      p("Área destinada à equipe responsável pelo simulador."),
-      
-      p("A autenticação e os recursos administrativos
-        serão implementados posteriormente.")
-    )
   )
+
+  # A aba Administração foi retirada por enquanto. Se voltar a
+  # ser necessária (por exemplo, para atualizar o SCImago), entra
+  # aqui como "8. ADMINISTRAÇÃO".
 )
 
 server <- function(input, output, session) {
@@ -284,7 +381,52 @@ server <- function(input, output, session) {
   # Uma conexão com o banco para cada pessoa usando o app.
   # Ela fecha sozinha quando a pessoa sai.
   con <- dbConnect(SQLite(), arquivo_banco)
-  session$onSessionEnded(function() dbDisconnect(con))
+
+  # Quando a pessoa sai do app: fecha a conexão (a tabela
+  # temporária com os artigos some junto) e apaga o currículo
+  # enviado. Nenhum dado do docente fica guardado no servidor.
+  session$onSessionEnded(function() {
+    dbDisconnect(con)
+    curriculo <- isolate(input$lattes$datapath)
+    if (!is.null(curriculo)) unlink(curriculo)
+  })
+
+  # ---------- LOGIN ----------
+
+  # TRUE depois que a pessoa digita a senha certa. Vale só para
+  # esta sessão: ao fechar ou recarregar a página, pede de novo.
+  logado <- reactiveVal(FALSE)
+  tentativas <- reactiveVal(0)
+
+  output$pagina <- renderUI({
+    if (logado()) ui_simulador else ui_login
+  })
+
+  observeEvent(input$entrar, {
+    if (!nzchar(senha_correta)) {
+      output$erro_login <- renderText(
+        "A senha do simulador não foi configurada. Avise a secretaria do PPGE."
+      )
+      return()
+    }
+
+    if (tentativas() >= 5) {
+      output$erro_login <- renderText(
+        "Muitas tentativas erradas. Recarregue a página e tente de novo."
+      )
+      return()
+    }
+
+    if (identical(input$senha, senha_correta)) {
+      logado(TRUE)
+    } else {
+      tentativas(tentativas() + 1)
+      # Espera 1 segundo a cada erro, para dificultar quem tenta
+      # adivinhar a senha testando muitas combinações
+      Sys.sleep(1)
+      output$erro_login <- renderText("Senha incorreta.")
+    }
+  })
 
   # Quantidade de afastamentos informada (vazio conta como 0)
   n_afastamentos <- reactive({
@@ -313,7 +455,6 @@ server <- function(input, output, session) {
     })
   })
 
-  # Período de avaliação já recuado pelos afastamentos
   # Lista de afastamentos preenchidos (um par de datas cada).
   # Os incompletos ficam de fora.
   afastamentos <- reactive({
@@ -324,6 +465,7 @@ server <- function(input, output, session) {
       Filter(f = function(a) length(a) == 2 && !anyNA(a))
   })
 
+  # Período de avaliação já recuado pelos afastamentos
   periodo <- reactive({
     calcular_periodo(input$periodo, afastamentos())
   })
@@ -337,19 +479,18 @@ server <- function(input, output, session) {
     )
   })
 
-  # Artigos lidos do HTML enviado
+  # Artigos lidos do XML enviado
   artigos <- reactive({
-    req(input$lattes)
+    # Sem login, nenhum cálculo é feito (proteção também no
+    # server, não só na tela)
+    req(logado(), input$lattes)
 
-    # Se o arquivo não for um currículo válido, mostra um aviso
-    # em vez de travar o app.
+    # Se o arquivo não for o XML do Lattes, mostra o motivo em
+    # vez de travar o app (a mensagem vem de ler_artigos_lattes)
     tryCatch(
       ler_artigos_lattes(input$lattes$datapath),
       error = function(e) {
-        validate(paste(
-          "Não foi possível ler o currículo. Envie o .zip ou .xml",
-          "baixado do Lattes, ou o HTML salvo do navegador."
-        ))
+        validate(conditionMessage(e))
       }
     )
   })
@@ -437,19 +578,24 @@ server <- function(input, output, session) {
 
   # ---------- SIMULAÇÃO ----------
 
-  # Listas das caixas de busca. server = TRUE: o navegador só
-  # recebe as revistas que combinam com o que foi digitado
-  # (são mais de 50 mil revistas). selected = character(0) deixa
-  # a caixa vazia no início.
-  revistas <- listar_revistas(con)
-  opcoes_revistas <- setNames(revistas$Sourceid, revistas$rotulo)
-
-  updateSelectizeInput(session, "sim_revista",
-                       choices = opcoes_revistas, selected = character(0),
-                       server = TRUE)
-  updateSelectizeInput(session, "hist_area",
-                       choices = listar_categorias(con), selected = character(0),
-                       server = TRUE)
+  # Preenche as caixas de busca com as listas montadas no início
+  # do arquivo. server = TRUE: o navegador só recebe as revistas
+  # que combinam com o que foi digitado (são mais de 50 mil).
+  # selected = character(0) deixa a caixa vazia no início.
+  # Isso só pode ser feito depois do login, quando as caixas
+  # passam a existir na tela. O onFlushed espera a tela do
+  # simulador ser desenhada no navegador antes de preencher.
+  observeEvent(logado(), {
+    req(logado())
+    session$onFlushed(function() {
+      updateSelectizeInput(session, "sim_revista",
+                           choices = opcoes_revistas, selected = character(0),
+                           server = TRUE)
+      updateSelectizeInput(session, "hist_area",
+                           choices = categorias_scimago, selected = character(0),
+                           server = TRUE)
+    }, once = TRUE)
+  })
 
   # Artigos hipotéticos adicionados pelo docente
   hipoteticos <- reactiveVal(
@@ -458,7 +604,7 @@ server <- function(input, output, session) {
   )
 
   observeEvent(input$sim_adicionar, {
-    req(input$sim_revista, input$sim_ano)
+    req(logado(), input$sim_revista, input$sim_ano)
 
     sourceid <- as.numeric(input$sim_revista)
     ano <- as.integer(input$sim_ano)
@@ -526,7 +672,7 @@ server <- function(input, output, session) {
 
   # Histórico de uma área
   hist_area <- reactive({
-    req(input$hist_area)
+    req(logado(), input$hist_area)
     historico_categoria(con, input$hist_area)
   })
 
@@ -612,7 +758,7 @@ server <- function(input, output, session) {
   output$baixar_relatorio <- downloadHandler(
 
     filename = function() {
-      nome <- if (nzchar(input$nome)) input$nome else "docente"
+      nome <- if (isTruthy(input$nome)) input$nome else "docente"
       # Nome do arquivo sem acentos e espaços
       nome <- iconv(nome, to = "ASCII//TRANSLIT")
       nome <- gsub("[^A-Za-z0-9]+", "_", nome)
@@ -620,6 +766,7 @@ server <- function(input, output, session) {
     },
 
     content = function(file) {
+      req(logado())
       # O mesmo resultado mostrado nas outras abas
       avaliacao <- list(
         artigos = artigos(),
@@ -635,6 +782,9 @@ server <- function(input, output, session) {
       # baixando ao mesmo tempo não se atrapalharem
       pasta <- tempfile("relatorio_")
       dir.create(pasta)
+      # Depois do download, apaga a pasta com o PDF e os arquivos
+      # do LaTeX: o relatório fica só com o docente
+      on.exit(unlink(pasta, recursive = TRUE), add = TRUE)
       modelo <- file.path(pasta, "relatorio_docente.Rmd")
       file.copy(here("relatorio", "relatorio_docente.Rmd"), modelo)
 
@@ -656,8 +806,8 @@ server <- function(input, output, session) {
             envir = new.env(),
             quiet = TRUE,
             params = list(
-              nome = input$nome,
-              area = input$area,
+              nome = if (isTruthy(input$nome)) input$nome else "",
+              area = if (isTruthy(input$area)) input$area else "",
               periodo = input$periodo,
               afastamentos = afastamentos(),
               avaliacao = avaliacao

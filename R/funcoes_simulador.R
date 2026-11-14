@@ -8,71 +8,15 @@
 
 library(DBI) # Interface para trabalhar com bancos de dados.
 library(RSQLite) # Permite utilizar SQLite no R.
-library(rvest) # Ler e extrair informações de páginas HTML.
 library(dplyr) # Selecionar, filtrar e transformar dados.
 library(stringr) # Limpar textos.
 
 # ============================================================
-# 1. ABRIR O HTML DO LATTES
+# 1. LIMPAR O ISSN
 # ============================================================
-
-# O currículo pode chegar de dois jeitos:
-# - salvo pela página normal (Ctrl+S): o HTML já é o currículo;
-# - salvo pelo "Exibir código-fonte": o HTML é uma tabela em que
-#   cada linha (td.line-content) guarda uma linha do código
-#   original. Nesse caso juntamos as linhas e lemos de novo.
-ler_lattes <- function(arquivo) {
-  pagina <- read_html(arquivo, encoding = "windows-1252")
-
-  linhas <- html_text(html_elements(pagina, "td.line-content"))
-
-  if (length(linhas) > 0) {
-    pagina <- read_html(paste(linhas, collapse = "\n"))
-  }
-
-  pagina
-}
-
-# ============================================================
-# 2. EXTRAIR OS ARTIGOS
-# ============================================================
-
-# Cada artigo publicado fica em um <div class="artigo-completo">.
-# Dentro dele:
-# - o ano está em <span data-tipo-ordenacao="ano">;
-# - o ISSN está no atributo data-issn da imagem do JCR;
-# - título e revista estão no link de citações (atributo cvuri).
-extrair_artigos <- function(pagina) {
-  artigos <- html_elements(pagina, "div.artigo-completo")
-
-  # Pega um campo de dentro do link de citações
-  campo_cvuri <- function(cvuri, campo) {
-    str_match(cvuri, paste0("[?&]", campo, "=([^&]*)"))[, 2]
-  }
-
-  cvuri <- html_attr(
-    html_element(artigos, "span.citacoes"),
-    "cvuri"
-  )
-
-  tibble(
-    ano = as.integer(html_text(
-      html_element(artigos, "span[data-tipo-ordenacao='ano']")
-    )),
-    issn = html_attr(html_element(artigos, "img.ajaxJCR"), "data-issn"),
-    titulo = campo_cvuri(cvuri, "titulo"),
-    revista = campo_cvuri(cvuri, "nomePeriodico"),
-    doi = campo_cvuri(cvuri, "doi"),
-    # Texto completo da referência, útil para conferir
-    referencia = str_squish(html_text(
-      html_element(artigos, "div.layout-cell-11")
-    ))
-  ) |>
-    limpar_issn()
-}
 
 # Deixa o ISSN no mesmo formato da tabela issn_revista
-# (sem hífen, X maiúsculo). Vale para o HTML e para o XML.
+# (sem hífen, X maiúsculo).
 limpar_issn <- function(artigos) {
   artigos |>
     mutate(
@@ -82,20 +26,19 @@ limpar_issn <- function(artigos) {
 }
 
 # ============================================================
-# 2B. EXTRAIR OS ARTIGOS DO XML
+# 2. EXTRAIR OS ARTIGOS DO XML
 # ============================================================
 
-# O próprio dono do currículo consegue baixar o Lattes em XML
-# (vem dentro de um .zip). No XML cada informação tem um campo
-# próprio, então a leitura é mais segura que a do HTML:
+# Só o próprio dono do currículo consegue baixar o Lattes em XML
+# (vem dentro de um .zip). Por isso o simulador aceita SÓ o XML:
+# ninguém consegue simular o currículo de outra pessoa salvando a
+# página pública dela. No XML cada informação tem um campo próprio:
 #
 # <ARTIGO-PUBLICADO>
 #   <DADOS-BASICOS-DO-ARTIGO TITULO-DO-ARTIGO="..." ANO-DO-ARTIGO="..." DOI="..."/>
 #   <DETALHAMENTO-DO-ARTIGO TITULO-DO-PERIODICO-OU-REVISTA="..." ISSN="..."/>
 # </ARTIGO-PUBLICADO>
 #
-# A tabela devolvida tem as mesmas colunas da versão em HTML,
-# então o resto do cálculo não muda.
 extrair_artigos_xml <- function(arquivo) {
   curriculo <- xml2::read_xml(arquivo)
 
@@ -127,13 +70,14 @@ extrair_artigos_xml <- function(arquivo) {
 }
 
 # ============================================================
-# 2C. LER O CURRÍCULO EM QUALQUER FORMATO
+# 3. LER O CURRÍCULO ENVIADO
 # ============================================================
 
 # É esta função que o app usa. Ela aceita:
-# - .zip baixado do Lattes (com o XML dentro);
-# - .xml;
-# - .html / .htm (salvo do navegador).
+# - o .zip baixado do Lattes (com o XML dentro);
+# - o .xml que está dentro do .zip.
+# Qualquer outro arquivo (por exemplo, o HTML da página pública
+# do currículo) é recusado com uma mensagem explicando o motivo.
 #
 # O formato é descoberto pelo conteúdo do arquivo, e não só
 # pelo nome, porque o nome pode vir sem extensão.
@@ -143,27 +87,33 @@ ler_artigos_lattes <- function(arquivo) {
 
   if (identical(rawToChar(inicio), "PK")) {
     pasta <- tempfile("lattes_")
+    # Apaga o XML descompactado assim que a leitura termina:
+    # os dados do docente não ficam guardados no servidor
+    on.exit(unlink(pasta, recursive = TRUE), add = TRUE)
     arquivos_zip <- unzip(arquivo, exdir = pasta)
     arquivo <- arquivos_zip[str_detect(arquivos_zip, "(?i)[.]xml$")][1]
 
     if (is.na(arquivo)) {
-      stop("O arquivo .zip não tem nenhum XML do Lattes dentro.")
+      stop("O arquivo .zip não tem o XML do currículo Lattes dentro.")
     }
   }
 
   # XML do Lattes: começa com <?xml e tem a tag CURRICULO-VITAE
   comeco <- readChar(arquivo, nchars = 500, useBytes = TRUE)
 
-  if (str_detect(comeco, "<\\?xml") &&
-      str_detect(comeco, "CURRICULO-VITAE")) {
-    extrair_artigos_xml(arquivo)
-  } else {
-    extrair_artigos(ler_lattes(arquivo))
+  if (!str_detect(comeco, "<\\?xml") ||
+      !str_detect(comeco, "CURRICULO-VITAE")) {
+    stop(paste(
+      "O simulador aceita apenas o currículo Lattes em XML",
+      "(o .zip ou o .xml baixado pelo próprio docente na Plataforma Lattes)."
+    ))
   }
+
+  extrair_artigos_xml(arquivo)
 }
 
 # ============================================================
-# 3. PERCENTIL DE CADA ARTIGO
+# 4. PERCENTIL DE CADA ARTIGO
 # ============================================================
 
 # Mesma consulta do 06_pontuacao.Rmd (opção A: percentil da
@@ -220,7 +170,7 @@ percentil_artigos <- function(con, artigos, ano_inicio, ano_fim) {
 }
 
 # ============================================================
-# 4. PONTUAÇÃO DO DOCENTE
+# 5. PONTUAÇÃO DO DOCENTE
 # ============================================================
 
 # Soma dos 4 melhores artigos válidos (percentil >= 0,25).
@@ -244,7 +194,7 @@ calcular_pontuacao <- function(percentis, minimo = 1.25) {
 }
 
 # ============================================================
-# 5. PERÍODO DE AVALIAÇÃO COM AFASTAMENTOS
+# 6. PERÍODO DE AVALIAÇÃO COM AFASTAMENTOS
 # ============================================================
 
 # Soma os dias de afastamento e recua o início do período por
@@ -285,14 +235,14 @@ calcular_periodo <- function(periodo, afastamentos = list()) {
 }
 
 # ============================================================
-# 6. AVALIAÇÃO COMPLETA DE UM DOCENTE
+# 7. AVALIAÇÃO COMPLETA DE UM DOCENTE
 # ============================================================
 
 # Junta todas as etapas em uma função só. É ela que o app e o
 # relatório usam, para os dois darem sempre o mesmo resultado.
 #
 # - con: conexão com o banco simulador_ppge.sqlite;
-# - arquivo: currículo Lattes (.zip, .xml ou .html);
+# - arquivo: currículo Lattes em XML (.zip ou .xml);
 # - periodo: vetor com duas datas (início e fim da avaliação);
 # - afastamentos: lista em que cada item tem duas datas.
 avaliar_docente <- function(con, arquivo, periodo, afastamentos = list()) {
@@ -325,7 +275,7 @@ avaliar_docente <- function(con, arquivo, periodo, afastamentos = list()) {
 }
 
 # ============================================================
-# 7. CONSULTAS PARA A ABA SIMULAÇÃO
+# 8. CONSULTAS PARA A ABA SIMULAÇÃO
 # ============================================================
 
 # Lista de revistas para a caixa de busca do app.

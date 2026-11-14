@@ -11,7 +11,7 @@ params:
 Este arquivo calcula a pontuação de **qualquer docente**. Para usar com outro
 currículo, mude os `params` no topo:
 
-- `arquivo`: currículo Lattes (.zip, .xml ou .html), a partir da pasta do projeto;
+- `arquivo`: currículo Lattes em XML (.zip ou .xml), a partir da pasta do projeto;
 - `inicio` e `fim`: período de avaliação;
 - `afastamentos`: períodos no formato `AAAA-MM-DD a AAAA-MM-DD`, separados
   por `;`. Deixe `""` se não houver afastamento.
@@ -75,7 +75,7 @@ O período original começa em `r params$inicio`. Com
 
 ## 3. Artigos do currículo
 
-`ler_artigos_lattes()` descobre sozinha se o arquivo é .zip, .xml ou .html.
+`ler_artigos_lattes()` aceita o .zip ou o .xml do Lattes e recusa qualquer outro arquivo.
 
 ```{r}
 artigos <- ler_artigos_lattes(here::here(params$arquivo))

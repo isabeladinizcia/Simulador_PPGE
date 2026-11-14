@@ -217,7 +217,7 @@ nrow(resultado_2021$categorias)
 
 
 # ============================================================
-# 12. LISTAR OS ARQUIVOS SJR
+# 11. LISTAR OS ARQUIVOS SJR
 # ============================================================
 
 arquivos_sjr <- list.files(
@@ -229,7 +229,7 @@ arquivos_sjr <- list.files(
 arquivos_sjr
 
 # ============================================================
-# 13. APLICAR A LIMPEZA A TODOS OS ANOS
+# 12. APLICAR A LIMPEZA A TODOS OS ANOS
 # ============================================================
 
 resultados_sjr <- purrr::map(
@@ -246,7 +246,7 @@ names(resultados_sjr) <- str_extract(
 names(resultados_sjr[["2021"]]$periodicos)
 
 # ============================================================
-# 14. JUNTAR OS DADOS HISTÓRICOS
+# 13. JUNTAR OS DADOS HISTÓRICOS
 # ============================================================
 
 periodicos_historico <- purrr::map_dfr(
@@ -260,7 +260,7 @@ categorias_historico <- purrr::map_dfr(
 )
 
 # ============================================================
-# 16. SALVAR OS DADOS LIMPOS
+# 14. SALVAR OS DADOS LIMPOS
 # ============================================================
 
 write_csv(

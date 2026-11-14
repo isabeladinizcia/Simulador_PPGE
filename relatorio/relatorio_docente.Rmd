@@ -192,10 +192,13 @@ Total de artigos no currículo: **`r nrow(av$artigos)`**. No período:
 - A pontuação é a soma dos 4 melhores artigos e precisa ser igual ou maior
   que 1,25.
 
-**Fontes:** currículo Lattes enviado pelo docente; SCImago Journal Rank, anos
+**Fontes:** currículo Lattes em XML enviado pelo docente; SCImago Journal Rank, anos
 de 2015 a 2025.
 
 \bigskip
 
 \begin{center}\small\textit{Este relatório é uma simulação e não substitui a
-avaliação oficial do programa.}\end{center}
+avaliação oficial do programa.}\\[4pt]
+\small\textit{Documento de uso único e exclusivo do docente indicado acima.
+Os dados do currículo foram usados apenas para gerar este relatório e não
+ficaram armazenados no simulador.}\end{center}

@@ -11,8 +11,8 @@ source("R/funcoes_simulador.R")
 # ============================================================
 
 # Currículo fictício de exemplo. Para testar outro currículo,
-# troque o caminho: pode ser o .zip ou o .xml baixado do Lattes,
-# ou o HTML salvo do navegador.
+# troque o caminho: pode ser o .zip ou o .xml baixado do Lattes.
+# O simulador aceita só o XML (o HTML do Lattes é recusado).
 arquivo <- "dados/exemplo/curriculo_ficticio.xml"
 
 # ler_artigos_lattes() descobre o formato sozinha

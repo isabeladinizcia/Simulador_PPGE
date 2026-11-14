@@ -4,9 +4,13 @@
 .Ruserdata
 
 # Banco de dados: passa de 100 MB (limite do GitHub).
-# É recriado rodando os scripts 02_banco_dados.R e 03_percentis.R.
+# É recriado rodando os scripts 01_limpeza.R a 04_issn.R, em ordem.
 dados/limpos/*.sqlite
 
 # Relatório do 06: traz os artigos do docente usado no teste.
 # É recriado rodando o 06_pontuacao.Rmd (Knit).
 R/06_pontuacao.html
+
+# Senha de acesso do simulador (SIMULADOR_SENHA). Nunca vai
+# para o GitHub. Cada computador ou servidor tem o seu.
+.Renviron
