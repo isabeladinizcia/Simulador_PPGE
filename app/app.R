@@ -4,7 +4,12 @@ library(here) # Acha a pasta do projeto, de onde quer que o app rode.
 # Funções de leitura do Lattes e de pontuação
 source(here("R", "funcoes_simulador.R"))
 
-arquivo_banco <- here("dados/limpos", "simulador_ppge.sqlite")
+# Usa o banco menor feito para o app (R/07_banco_app.R) quando
+# ele existe; senão, o banco completo. Na nuvem só vai o menor.
+arquivo_banco <- here("dados/limpos", "simulador_ppge_app.sqlite")
+if (!file.exists(arquivo_banco)) {
+  arquivo_banco <- here("dados/limpos", "simulador_ppge.sqlite")
+}
 
 # Listas das caixas de busca da aba Simulação. Ficam fora do
 # server para serem montadas UMA vez, quando o app liga, e não
