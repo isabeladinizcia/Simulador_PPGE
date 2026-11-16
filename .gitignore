@@ -18,3 +18,7 @@ R/06_pontuacao.html
 # Pasta criada pelo rsconnect ao publicar no shinyapps.io
 # (registro de onde o app foi publicado)
 rsconnect/
+
+# Configurações do Claude (atalho para abrir o app nos testes).
+# Só vale neste computador.
+.claude/
