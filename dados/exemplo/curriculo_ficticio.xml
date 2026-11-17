@@ -5,22 +5,22 @@
   são reais, para que o percentil venha do SCImago.
   Mesma estrutura do XML do Lattes (só as partes que o simulador lê).
 
-  Resultado esperado (percentis do SCImago 2015-2025):
+  Resultado esperado (nota = maior percentil da revista de 2022 a 2025):
 
   Período 01/01/2022 a 31/12/2025, sem afastamento:
-    válidos: 2023 AER 0,999 | 2022 Economic Modelling 0,805 |
-             2023 Braz. J. Political Economy 0,607 | 2024 Applied Econ. Letters 0,441
-    pontuação = 0,999 + 0,805 + 0,607 + 0,441 = 2,852 -> atinge o mínimo
+    válidos: 2023 AER 0,999 | 2022 Economic Modelling 0,824 |
+             2023 Braz. J. Political Economy 0,607 | 2024 Applied Econ. Letters 0,508
+    pontuação = 0,999 + 0,824 + 0,607 + 0,508 = 2,938 -> atinge o mínimo
 
   Com 1 afastamento de 01/01/2023 a 31/12/2023 (365 dias):
-    período recua para 2021, entra 2021 Economic Modelling 0,751
-    pontuação = 0,999 + 0,805 + 0,751 + 0,607 = 3,162
+    período volta para 2021, entra 2021 Economic Modelling com 0,824
+    pontuação = 0,999 + 0,824 + 0,824 + 0,607 = 3,253
 
-  Artigos que nunca pontuam no período:
+  Artigos que não pontuam:
     2023 Revista Brasileira de Economia 0,166 -> abaixo de 0,25
-    2024 Revista Fictícia (ISSN inventado)    -> não encontrada no SCImago
+    2024 Revista Fictícia (ISSN inventado)    -> não está no SCImago
     2025 sem ISSN                              -> sem ISSN no currículo
-    2026 Economic Modelling                   -> sem percentil no ano (fora até 2025)
+    2026 Economic Modelling                   -> fora do período (até 2025)
     2018 Braz. J. Political Economy           -> fora do período
 -->
 <DADOS-GERAIS NOME-COMPLETO="Docente Fictícia de Exemplo"/>

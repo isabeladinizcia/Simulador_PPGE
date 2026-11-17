@@ -2,142 +2,77 @@
 
 Simulador de credenciamento docente do PPGE. O docente envia o currículo
 Lattes em XML, informa o período de avaliação e os afastamentos, e o app
-calcula a pontuação dos artigos a partir do SJR (SCImago Journal Rank),
-mostra se atinge o mínimo para credenciamento e gera um relatório em PDF.
+calcula a pontuação dos artigos a partir do SJR (SCImago Journal Rank).
 
-Feito em R, com Shiny e SQLite.
+Feito em R (Shiny) com um banco SQLite. As contas são feitas em SQL.
 
-## Regras de pontuação
+## Regras
 
-- Cada artigo vale o **percentil da revista no ano em que foi publicado**.
-  O percentil é a fração das revistas da mesma área (categoria do SCImago)
-  com SJR menor ou igual ao da revista. Se a revista está em mais de uma
-  área, vale o maior percentil.
-- **Não pontuam:** artigos com percentil abaixo de 0,25, de revistas fora do
-  SCImago, sem ISSN no currículo ou de anos que ainda não têm SCImago
-  (por exemplo, 2026).
-- Contam os artigos publicados no **período de avaliação**. Os dias de
-  afastamento são somados (sem contar duas vezes dias sobrepostos) e o
-  início do período recua por esse total.
-- A soma dos **4 melhores artigos** precisa ser igual ou maior que **1,25**.
+1. A nota de cada artigo é o **maior percentil da revista entre 2022 e 2025**.
+   O percentil é a parte das revistas da mesma área com SJR menor ou igual ao
+   da revista. Se a revista está em mais de uma área, vale o maior.
+2. Contam os artigos do período de avaliação. Os dias de afastamento são
+   somados (dia repetido conta uma vez) e o início do período volta esse total.
+3. Não pontuam: nota abaixo de 0,25, revista fora do SCImago e artigo sem ISSN.
+4. A soma dos **4 melhores artigos** precisa ser **1,25 ou mais**.
 
-> Os critérios definitivos ainda serão ajustados conforme as regras oficiais
-> do programa.
-
-## O app
-
-O app tem as abas:
-
-1. **Início** – como funciona e privacidade dos dados.
-2. **Dados do docente** – nome, área, período de avaliação, afastamentos e
-   envio do currículo Lattes.
-3. **Produção científica** – artigos encontrados no período, com o percentil
-   de cada um.
-4. **Critérios** – as regras acima.
-5. **Resultado** – pontuação e os artigos que entram na conta.
-6. **Simulação** – simula novos artigos (revista + ano) e mostra o histórico
-   de percentil de uma revista ou de uma área.
-7. **Relatório** – baixa o relatório em PDF.
-
-### Currículo Lattes só em XML
-
-O app aceita **apenas o XML do Lattes** (o `.zip` baixado do Lattes ou o
-`.xml` de dentro dele). O HTML da página pública é recusado. Como só o próprio
-dono consegue baixar o XML, ninguém consegue simular o currículo de outra
-pessoa. Passo a passo para gerar o arquivo:
-[guia da UFJF](https://www2.ufjf.br/propp/2024/11/13/como-gerar-o-arquivo-xml-do-curriculo-lattes/).
-
-### Senha de acesso
-
-O app pede uma senha antes de abrir. Ela **não** fica no código: fica no
-arquivo `.Renviron`, na pasta do projeto, que está no `.gitignore`. O arquivo
-tem uma linha:
+## Arquivos
 
 ```
-SIMULADOR_SENHA=a_senha_escolhida
+criar_banco.R    PASSO 1: monta o banco a partir dos CSVs (rodar uma vez)
+funcoes.R        Funções: ler o Lattes e calcular as notas
+app.R            PASSO 2: o app (botão Run App)
+relatorio.Rmd    Modelo do relatório em PDF
+publicar.R       PASSO 3: publicar no shinyapps.io
+dados/brutos/    Planilhas do SCImago (2022 a 2025)
+dados/exemplo/   Currículo fictício para testar
 ```
 
-Cada computador ou servidor tem o seu `.Renviron`.
+## Banco de dados (`dados/simulador.sqlite`)
 
-### Privacidade
+| Tabela      | O que tem                                         |
+|-------------|---------------------------------------------------|
+| `percentis` | Revista, ano, área, SJR e percentil na área       |
+| `revistas`  | Nome da revista e a nota (maior percentil)        |
+| `issn`      | ISSN de cada revista                              |
 
-- O currículo é usado só para o cálculo, enquanto o app está aberto.
-- Os artigos vão para uma tabela temporária do banco, que some quando a
-  pessoa fecha o app; o arquivo enviado também é apagado.
-- O PDF é gerado só no momento do download e não fica guardado no servidor.
+Os dados do docente ficam em tabelas temporárias, que somem quando o app fecha.
 
-## Estrutura do projeto
+O banco não vai para o GitHub. Para criar, rode o `criar_banco.R` (menos de
+1 minuto).
 
-```
-app.R                        Entrada do app para o shinyapps.io (aponta para app/app.R)
-app/app.R                    O app Shiny
-R/funcoes_simulador.R        Funções usadas pelo app, pelo 05 e pelo 06
-R/01_limpeza.R               Limpa os CSVs do SCImago (2015–2025)
-R/02_banco_dados.R           Cria o banco SQLite com os dados limpos
-R/03_percentis.R             Calcula o percentil de cada revista por área e ano
-R/04_issn.R                  Cria a tabela ISSN -> revista
-R/05_lattes.R                Testa a leitura de um currículo Lattes
-R/06_pontuacao.Rmd           Calcula a pontuação de um docente (relatório HTML)
-R/07_banco_app.R             Cria o banco menor, só com o que o app usa
-R/08_publicar.R              Publica o app no shinyapps.io
-relatorio/relatorio_docente.Rmd   Modelo do relatório em PDF
-dados/brutos/                CSVs originais do SCImago
-dados/limpos/                CSVs limpos e bancos SQLite
-dados/exemplo/               Currículo fictício para testes
-```
+### Ano novo do SCImago
+
+1. Coloque o CSV novo em `dados/brutos/` (ex.: `scimagojr 2026.csv`).
+2. No topo do `criar_banco.R`, mude a linha `anos <- 2022:2025`.
+3. Rode o `criar_banco.R` uma vez.
 
 ## Como rodar
 
-### 1. Pacotes
+1. Instale os pacotes:
 
-No RStudio, abra o `Simulador_PPGE.Rproj` e instale os pacotes:
+   ```r
+   install.packages(c("shiny", "DBI", "RSQLite", "xml2", "ggplot2",
+                      "rmarkdown", "knitr", "rsconnect", "tinytex"))
+   tinytex::install_tinytex()  # para gerar o PDF
+   ```
 
-```r
-install.packages(c(
-  "shiny", "here", "DBI", "RSQLite", "dplyr", "tidyr", "stringr",
-  "readr", "purrr", "xml2", "DT", "ggplot2", "rmarkdown", "knitr",
-  "rsconnect", "tinytex"
-))
-tinytex::install_tinytex()  # LaTeX para gerar o PDF do relatório
-```
+2. Rode o `criar_banco.R`.
+3. Crie o arquivo `.Renviron` na pasta do projeto com a linha
+   `SIMULADOR_SENHA=a_senha_escolhida` (ele não vai para o GitHub).
+4. Abra o `app.R` e clique em **Run App**. Para testar, use
+   `dados/exemplo/curriculo_ficticio.xml`.
 
-### 2. Criar o banco de dados
+## Privacidade
 
-O banco (`dados/limpos/*.sqlite`) passa de 100 MB e por isso **não está no
-GitHub**. Para recriá-lo, rode os scripts em ordem:
-
-1. `R/01_limpeza.R`
-2. `R/02_banco_dados.R`
-3. `R/03_percentis.R`
-4. `R/04_issn.R`
-5. `R/07_banco_app.R` (banco menor para o app; feche o app antes de rodar)
-
-Rode de novo do 01 ao 04 e o 07 sempre que entrar um ano novo do SCImago
-(o CSV novo vai em `dados/brutos/`).
-
-### 3. Senha
-
-Crie o arquivo `.Renviron` na pasta do projeto com a linha
-`SIMULADOR_SENHA=...` (veja [Senha de acesso](#senha-de-acesso)).
-
-### 4. Abrir o app
-
-Abra `app/app.R` e clique em **Run App**. Para testar sem um currículo
-real, use `dados/exemplo/curriculo_ficticio.xml`.
-
-O `R/06_pontuacao.Rmd` faz o mesmo cálculo fora do app: mude os `params`
-no topo (arquivo, período e afastamentos) e clique em **Knit**.
+- O app aceita só o XML do Lattes, que só o próprio docente consegue baixar
+  ([guia da UFJF](https://www2.ufjf.br/propp/2024/11/13/como-gerar-o-arquivo-xml-do-curriculo-lattes/)).
+- O currículo é usado só enquanto o app está aberto e depois é apagado.
+- O PDF é gerado só no download e não fica guardado.
 
 ## Publicar no shinyapps.io
 
-Na primeira vez:
-
-1. Crie uma conta em <https://www.shinyapps.io>.
-2. No site, vá em **Account > Tokens > Show > Show secret**, copie o comando
-   `rsconnect::setAccountInfo(...)` e rode no console do RStudio.
-   **Não** cole esse comando em nenhum arquivo do projeto: ele tem a sua
-   chave secreta.
-
-Depois, rode o `R/08_publicar.R` (Source). Ele confere se a conta, o banco
-do app e o `.Renviron` estão prontos e envia só os arquivos que o app
-precisa. O endereço fica `https://SEU-USUARIO.shinyapps.io/simulador-ppge/`.
+Na primeira vez, crie a conta em <https://www.shinyapps.io>, vá em
+**Account > Tokens > Show secret** e rode no console o comando
+`rsconnect::setAccountInfo(...)` (não cole em nenhum arquivo). Depois rode o
+`publicar.R`.

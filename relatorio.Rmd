@@ -1,0 +1,49 @@
+---
+title: "Relatório - Simulador PPGE"
+output: pdf_document
+params:
+  nome: ""
+  periodo: ""
+  afastamentos: NULL
+  total: 0
+  resultado: ""
+  melhores: NULL
+  todos: NULL
+---
+
+**Docente:** `r params$nome`
+
+**Data:** `r format(Sys.Date(), "%d/%m/%Y")`
+
+**Período:** `r params$periodo`
+
+**Pontuação:** `r round(params$total, 3)` (mínimo 1,25)
+
+**Resultado:** `r params$resultado`
+
+## Afastamentos
+
+```{r, echo = FALSE}
+knitr::kable(params$afastamentos)
+```
+
+## Os 4 melhores artigos
+
+```{r, echo = FALSE}
+knitr::kable(params$melhores, digits = 3)
+```
+
+## Todos os artigos do período
+
+```{r, echo = FALSE}
+knitr::kable(params$todos, digits = 3)
+```
+
+## Regras
+
+1. A nota de cada artigo é o maior percentil da revista entre 2022 e 2025 (SCImago).
+2. Os dias de afastamento fazem o início do período voltar.
+3. Não pontuam: nota abaixo de 0,25, revista fora do SCImago e artigo sem ISSN.
+4. A soma dos 4 melhores artigos precisa ser 1,25 ou mais.
+
+*Este relatório é uma simulação de uso exclusivo do docente.*
